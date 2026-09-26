@@ -5,21 +5,27 @@ import path from "path";
 import { fileURLToPath } from "url";
 import {
   canJoin,
+  checkWinCondition,
   cleanName,
   createPlayer,
   createRoom,
+  eliminatePlayer,
   privateState,
   publicRoom,
   resetRoom,
+  setTarget,
   startGame,
-  submitEntry
+  tick
 } from "./game.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" }, maxHttpBufferSize: 1e6 });
+const io = new Server(server, { cors: { origin: "*" } });
 const rooms = new Map();
+const intervals = new Map();
+
+const TICK_MS = 120;
 
 app.use(express.static(path.join(__dirname, "..", "public")));
 
@@ -86,16 +92,25 @@ io.on("connection", (socket) => {
   });
 
   socket.on("startGame", replyFor(socket, (room, playerId) => {
-    if (room.hostId !== playerId) throw new Error("Only the host can start the game.");
+    if (room.hostId !== playerId) throw new Error("Only the host can start the match.");
     startGame(room);
+    startTickLoop(room);
   }));
 
-  socket.on("submitEntry", ({ content }, reply) => {
-    runWithRoom(socket, reply, (room, playerId) => submitEntry(room, playerId, content));
+  socket.on("setTarget", ({ x, y }, reply) => {
+    try {
+      const room = getSocketRoom(socket);
+      if (!room) throw new Error("Join or create a room first.");
+      setTarget(room, socket.data.playerId, x, y);
+      reply?.({ ok: true });
+    } catch (error) {
+      reply?.({ ok: false, error: error.message });
+    }
   });
 
   socket.on("playAgain", replyFor(socket, (room, playerId) => {
     if (room.hostId !== playerId) throw new Error("Only the host can reset the room.");
+    stopTickLoop(room.code);
     resetRoom(room);
   }));
 
@@ -104,13 +119,20 @@ io.on("connection", (socket) => {
       const room = getSocketRoom(socket);
       if (room) {
         const playerId = socket.data.playerId;
-        room.players.delete(playerId);
-        if (room.hostId === playerId && room.players.size > 0) {
-          room.hostId = [...room.players.keys()][0];
+        if (room.phase === "playing") {
+          eliminatePlayer(room, playerId);
+          const ended = checkWinCondition(room);
+          if (ended) stopTickLoop(room.code);
+        } else {
+          room.players.delete(playerId);
+          if (room.hostId === playerId && room.players.size > 0) {
+            room.hostId = [...room.players.keys()][0];
+          }
         }
         socket.leave(room.code);
         socket.leave(playerId);
         if (room.players.size === 0) {
+          stopTickLoop(room.code);
           rooms.delete(room.code);
         } else {
           broadcast(room);
@@ -133,6 +155,24 @@ io.on("connection", (socket) => {
     broadcast(room);
   });
 });
+
+function startTickLoop(room) {
+  stopTickLoop(room.code);
+  const handle = setInterval(() => {
+    const ended = tick(room);
+    broadcast(room);
+    if (ended) stopTickLoop(room.code);
+  }, TICK_MS);
+  intervals.set(room.code, handle);
+}
+
+function stopTickLoop(code) {
+  const handle = intervals.get(code);
+  if (handle) {
+    clearInterval(handle);
+    intervals.delete(code);
+  }
+}
 
 function joinSocketToRoom(socket, code, playerId) {
   socket.join(code);
@@ -181,5 +221,5 @@ function makeRoomCode() {
 
 const port = process.env.PORT || 3000;
 server.listen(port, () => {
-  console.log(`Telephone Sketch is running on http://localhost:${port}`);
+  console.log(`Zone Drop is running on http://localhost:${port}`);
 });
