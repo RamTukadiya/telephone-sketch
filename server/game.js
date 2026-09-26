@@ -1,17 +1,23 @@
-const MIN_PLAYERS = 3;
+const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 8;
+
+export const ARENA_SIZE = 600;
+const INITIAL_RADIUS = 280;
+const MIN_RADIUS = 40;
+const SHRINK_PER_TICK = 0.36;
+const PLAYER_SPEED_PER_TICK = 18;
+const DAMAGE_PER_TICK = 2;
+const SUDDEN_DEATH_DAMAGE_PER_TICK = 3;
+const START_HEALTH = 100;
 
 export function createRoom(code, hostId, hostName) {
   return {
     code,
     hostId,
     phase: "lobby",
-    playerOrder: [],
     players: new Map([[hostId, createPlayer(hostId, hostName)]]),
-    books: [],
-    currentRound: 0,
-    totalRounds: 0,
-    submissions: new Set()
+    zone: { cx: ARENA_SIZE / 2, cy: ARENA_SIZE / 2, radius: INITIAL_RADIUS },
+    winnerId: ""
   };
 }
 
@@ -19,7 +25,13 @@ export function createPlayer(id, name) {
   return {
     id,
     name: cleanName(name),
-    connected: true
+    connected: true,
+    x: ARENA_SIZE / 2,
+    y: ARENA_SIZE / 2,
+    targetX: ARENA_SIZE / 2,
+    targetY: ARENA_SIZE / 2,
+    health: START_HEALTH,
+    alive: true
   };
 }
 
@@ -33,72 +45,90 @@ export function canJoin(room) {
 }
 
 export function startGame(room) {
-  if (room.phase !== "lobby") throw new Error("This room has already started.");
+  if (room.phase !== "lobby") throw new Error("This game has already started.");
   if (room.players.size < MIN_PLAYERS) throw new Error(`You need at least ${MIN_PLAYERS} players.`);
 
-  room.playerOrder = [...room.players.keys()];
-  const n = room.playerOrder.length;
-  room.books = room.playerOrder.map((authorId) => ({ authorId, entries: [] }));
-  room.currentRound = 0;
-  room.totalRounds = n - 1;
-  room.submissions.clear();
-  room.phase = "relay";
+  room.zone = { cx: ARENA_SIZE / 2, cy: ARENA_SIZE / 2, radius: INITIAL_RADIUS };
+  room.winnerId = "";
+  const n = room.players.size;
+  let i = 0;
+  for (const player of room.players.values()) {
+    const angle = (i / n) * Math.PI * 2;
+    const spawnRadius = 180;
+    player.x = ARENA_SIZE / 2 + Math.cos(angle) * spawnRadius;
+    player.y = ARENA_SIZE / 2 + Math.sin(angle) * spawnRadius;
+    player.targetX = player.x;
+    player.targetY = player.y;
+    player.health = START_HEALTH;
+    player.alive = true;
+    i += 1;
+  }
+  room.phase = "playing";
 }
 
-function bookIndexFor(room, playerId) {
-  const n = room.playerOrder.length;
-  const playerIndex = room.playerOrder.indexOf(playerId);
-  if (playerIndex === -1) throw new Error("You are not in this game.");
-  return (((playerIndex - room.currentRound) % n) + n) % n;
+export function setTarget(room, playerId, x, y) {
+  if (room.phase !== "playing") throw new Error("The match has not started.");
+  const player = room.players.get(playerId);
+  if (!player) throw new Error("You are not in this room.");
+  if (!player.alive) throw new Error("You have been eliminated.");
+  player.targetX = clamp(Number(x) || 0, 0, ARENA_SIZE);
+  player.targetY = clamp(Number(y) || 0, 0, ARENA_SIZE);
 }
 
-function nextEntryType(book) {
-  if (book.entries.length === 0) return "phrase";
-  const last = book.entries.at(-1);
-  return last.type === "phrase" ? "drawing" : "phrase";
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
-export function currentTask(room, playerId) {
-  if (room.phase !== "relay") return null;
-  const bookIndex = bookIndexFor(room, playerId);
-  const book = room.books[bookIndex];
-  const type = nextEntryType(book);
-  const previousEntry = book.entries.at(-1) || null;
-  return {
-    bookIndex,
-    type,
-    previousEntry: previousEntry ? { type: previousEntry.type, content: previousEntry.content } : null,
-    hasSubmitted: room.submissions.has(playerId)
-  };
-}
+export function tick(room) {
+  if (room.phase !== "playing") return false;
 
-export function submitEntry(room, playerId, content) {
-  if (room.phase !== "relay") throw new Error("The relay is not open right now.");
-  if (room.submissions.has(playerId)) throw new Error("You already submitted this round.");
+  room.zone.radius = Math.max(MIN_RADIUS, room.zone.radius - SHRINK_PER_TICK);
 
-  const bookIndex = bookIndexFor(room, playerId);
-  const book = room.books[bookIndex];
-  const type = nextEntryType(book);
-
-  if (type === "phrase") {
-    const text = String(content || "").trim().replace(/\s+/g, " ").slice(0, 80);
-    if (text.length < 2) throw new Error("Write a slightly longer phrase.");
-    book.entries.push({ type: "phrase", playerId, content: text });
-  } else {
-    const dataUrl = String(content || "");
-    if (!dataUrl.startsWith("data:image/")) throw new Error("Draw something before submitting.");
-    if (dataUrl.length > 400000) throw new Error("Drawing is too large. Try a simpler sketch.");
-    book.entries.push({ type: "drawing", playerId, content: dataUrl });
+  for (const player of room.players.values()) {
+    if (!player.alive) continue;
+    const dx = player.targetX - player.x;
+    const dy = player.targetY - player.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 0.5) {
+      const step = Math.min(PLAYER_SPEED_PER_TICK, dist);
+      player.x += (dx / dist) * step;
+      player.y += (dy / dist) * step;
+    }
   }
 
-  room.submissions.add(playerId);
+  const zoneClosed = room.zone.radius <= MIN_RADIUS + 0.01;
 
-  if (room.submissions.size === room.players.size) {
-    room.submissions.clear();
-    room.currentRound += 1;
-    if (room.currentRound > room.totalRounds) {
-      room.phase = "reveal";
+  for (const player of room.players.values()) {
+    if (!player.alive) continue;
+    const distFromCenter = Math.hypot(player.x - room.zone.cx, player.y - room.zone.cy);
+    let damage = 0;
+    if (distFromCenter > room.zone.radius) damage += DAMAGE_PER_TICK;
+    if (zoneClosed) damage += SUDDEN_DEATH_DAMAGE_PER_TICK;
+    if (damage > 0) {
+      player.health = Math.max(0, player.health - damage);
+      if (player.health === 0) player.alive = false;
     }
+  }
+
+  return checkWinCondition(room);
+}
+
+export function checkWinCondition(room) {
+  if (room.phase !== "playing") return false;
+  const alivePlayers = [...room.players.values()].filter((player) => player.alive);
+  if (alivePlayers.length <= 1) {
+    room.phase = "gameOver";
+    room.winnerId = alivePlayers[0]?.id || "";
+    return true;
+  }
+  return false;
+}
+
+export function eliminatePlayer(room, playerId) {
+  const player = room.players.get(playerId);
+  if (player) {
+    player.alive = false;
+    player.connected = false;
   }
 }
 
@@ -109,39 +139,39 @@ export function publicRoom(room) {
     phase: room.phase,
     minPlayers: MIN_PLAYERS,
     maxPlayers: MAX_PLAYERS,
-    round: room.currentRound,
-    totalRounds: room.totalRounds,
-    submittedCount: room.submissions.size,
-    playerCount: room.players.size,
-    players: [...room.players.values()].map(({ id, name, connected }) => ({ id, name, connected })),
-    books:
-      room.phase === "reveal"
-        ? room.books.map((book) => ({
-            authorId: book.authorId,
-            authorName: room.players.get(book.authorId)?.name || "Unknown",
-            entries: book.entries.map((entry) => ({
-              type: entry.type,
-              content: entry.content,
-              playerName: room.players.get(entry.playerId)?.name || "Unknown"
-            }))
-          }))
-        : []
+    arenaSize: ARENA_SIZE,
+    zone: room.zone,
+    winnerId: room.winnerId,
+    winnerName: room.winnerId ? room.players.get(room.winnerId)?.name || "" : "",
+    players: [...room.players.values()].map(({ id, name, connected, x, y, health, alive }) => ({
+      id,
+      name,
+      connected,
+      x,
+      y,
+      health,
+      alive
+    }))
   };
 }
 
 export function privateState(room, playerId) {
   return {
     playerId,
-    isHost: room.hostId === playerId,
-    task: currentTask(room, playerId)
+    isHost: room.hostId === playerId
   };
 }
 
 export function resetRoom(room) {
   room.phase = "lobby";
-  room.playerOrder = [];
-  room.books = [];
-  room.currentRound = 0;
-  room.totalRounds = 0;
-  room.submissions.clear();
+  room.winnerId = "";
+  room.zone = { cx: ARENA_SIZE / 2, cy: ARENA_SIZE / 2, radius: INITIAL_RADIUS };
+  for (const player of room.players.values()) {
+    player.health = START_HEALTH;
+    player.alive = true;
+    player.x = ARENA_SIZE / 2;
+    player.y = ARENA_SIZE / 2;
+    player.targetX = ARENA_SIZE / 2;
+    player.targetY = ARENA_SIZE / 2;
+  }
 }
