@@ -8,7 +8,7 @@ let isResuming = false;
 let routeOverride = "";
 let lastRoutePath = "";
 let isHistoryNavigation = false;
-const SESSION_KEY = "telephoneSketchSession";
+const SESSION_KEY = "zoneDropSession";
 isResuming = Boolean(readSession()?.code && readSession()?.playerId);
 
 const joinMatch = location.pathname.match(/^\/join\/([A-Za-z0-9]{4})$/);
@@ -20,19 +20,28 @@ if (joinMatch && !isResuming) {
 }
 
 let showIntro = !isResuming && !cameFromJoinLink;
-let revealIndex = 0;
-let canvasCtx = null;
-let drawing = false;
-let lastPoint = null;
+let arenaCanvas = null;
+let arenaCtx = null;
+let wasAlive = true;
 
 socket.on("state", (nextState) => {
+  const wasPlaying = state.room?.phase === "playing";
   state = nextState;
   isResuming = false;
   notice = "";
   if (!isHistoryNavigation) routeOverride = "";
-  revealIndex = 0;
   syncBrowserRoute();
-  render();
+
+  const myPlayer = state.room?.players?.find((player) => player.id === state.me?.playerId);
+  const nowAlive = myPlayer ? myPlayer.alive : true;
+  const stillPlayingSameState = state.room?.phase === "playing" && wasPlaying && nowAlive === wasAlive;
+  wasAlive = nowAlive;
+
+  if (stillPlayingSameState) {
+    drawArena();
+  } else {
+    render();
+  }
 });
 
 socket.on("connect_error", () => {
@@ -49,7 +58,6 @@ function emit(event, payload = {}) {
     socket.emit(event, payload, (reply) => {
       if (!reply?.ok) notice = reply?.error || "Something went wrong.";
       resolve(reply);
-      render();
     });
   });
 }
@@ -61,8 +69,8 @@ function page(shell) {
     <section class="screen ${phaseClass}">
       <div class="topbar">
         <div>
-          <p class="eyebrow">Drawing relay party game</p>
-          <h1>Telephone Sketch</h1>
+          <p class="eyebrow">Last one standing</p>
+          <h1>Zone Drop</h1>
         </div>
         ${isHomeView ? "" : `<div class="topRight"><div class="roomBadge">Room <strong>${state.room.code}</strong></div><button class="ghost" data-action="leave" type="button">Leave room</button></div>`}
       </div>
@@ -90,8 +98,8 @@ function render() {
   const phase = routeOverride || state.room?.phase;
   if (!state.room || phase === "home") return renderHome();
   if (phase === "lobby") return renderLobby();
-  if (phase === "relay") return renderRelay();
-  if (phase === "reveal") return renderReveal();
+  if (phase === "playing") return renderPlaying();
+  if (phase === "gameOver") return renderGameOver();
 }
 
 function renderIntro() {
@@ -99,14 +107,14 @@ function renderIntro() {
     <section class="screen phase-home introScreen">
       <div class="topbar">
         <div>
-          <p class="eyebrow">Drawing relay party game</p>
-          <h1>Telephone Sketch</h1>
+          <p class="eyebrow">Last one standing</p>
+          <h1>Zone Drop</h1>
         </div>
       </div>
       <div class="introCard">
-        <p>1. Everyone writes a secret starting phrase.</p>
-        <p>2. Phrases and drawings pass around the group. Draw what you're shown, or guess what a drawing means.</p>
-        <p>3. At the end, watch every chain unfold — from the first phrase to its final, warped result.</p>
+        <p>1. Everyone drops into a shared arena. Tap or click to move your marker.</p>
+        <p>2. The safe zone shrinks over time. Stay inside it or take damage.</p>
+        <p>3. Last player standing wins.</p>
         <button class="primary" data-action="startPlaying" type="button">Let's play</button>
       </div>
     </section>
@@ -122,13 +130,13 @@ function renderLoading() {
     <section class="screen phase-home">
       <div class="topbar">
         <div>
-          <p class="eyebrow">Drawing relay party game</p>
-          <h1>Telephone Sketch</h1>
+          <p class="eyebrow">Last one standing</p>
+          <h1>Zone Drop</h1>
         </div>
       </div>
       <div class="reconnecting">
         <div class="spinner" aria-hidden="true"></div>
-        <p class="notice">Reconnecting to your game...</p>
+        <p class="notice">Reconnecting to your match...</p>
       </div>
     </section>
   `;
@@ -138,9 +146,9 @@ function renderHome() {
   page(`
     <section class="hero">
       <div>
-        <h2>${cameFromJoinLink ? "Join the relay." : "Write it. Draw it. Watch it warp."}</h2>
+        <h2>${cameFromJoinLink ? "Drop into the match." : "The zone is closing. Stay inside. Be the last one standing."}</h2>
         <p>${cameFromJoinLink ? "You scanned an invite. Type your name to join the room." : "Each player opens this site on their own phone or laptop. No login, no signup."}</p>
-        ${cameFromJoinLink ? "" : `<p class="tip">Best with 4-8 friends on a call together, or in the same room.</p>`}
+        ${cameFromJoinLink ? "" : `<p class="tip">Best with 2-8 friends, each on their own device.</p>`}
       </div>
       <form class="panel" id="homeForm">
         <label>Your name
@@ -173,6 +181,7 @@ function renderHome() {
     const playerId = getOrCreatePlayerId();
     const reply = await emit("createRoom", { name: form.name, playerId });
     if (reply?.ok) saveSession(reply.code, reply.playerId);
+    render();
   });
   app.querySelector("[data-action='join']").addEventListener("click", async () => {
     saveHomeForm();
@@ -180,6 +189,7 @@ function renderHome() {
     const playerId = getOrCreatePlayerId();
     const reply = await emit("joinRoom", { name: form.name, code: form.code, playerId });
     if (reply?.ok) saveSession(reply.code, reply.playerId);
+    render();
   });
 }
 
@@ -195,13 +205,13 @@ function renderLobby() {
         </div>
         ${me.isHost ? `<div id="qrCode" class="qrCode"></div>` : ""}
         <h2>Share the room code</h2>
-        <p>Players join from their own devices by entering a name and this room code, or by scanning the QR code above. Start with 3 to 8 players.</p>
+        <p>Players join from their own devices by entering a name and this room code, or by scanning the QR code above. Start with 2 to 8 players.</p>
         <div class="players">${playerList(room.players)}</div>
-        ${me.isHost ? `<button class="primary" data-action="start" ${room.players.length < room.minPlayers ? "disabled" : ""}>Start game</button>` : `<p class="waiting">Waiting for the host to start.</p>`}
+        ${me.isHost ? `<button class="primary" data-action="start" ${room.players.length < room.minPlayers ? "disabled" : ""}>Start match</button>` : `<p class="waiting">Waiting for the host to start.</p>`}
       </div>
       <aside class="rules">
         <h3>How it works</h3>
-        <p>Everyone writes a secret phrase. Each round, you'll get someone else's last entry and either draw what it means or guess a drawing's meaning in words. At the end, watch each phrase's full transformation.</p>
+        <p>You'll drop into a shared arena. Tap or click anywhere to move there. A safe zone shrinks over time — staying outside it costs you health. Last player alive wins.</p>
       </aside>
     </section>
   `);
@@ -223,173 +233,101 @@ function renderQrCode(code) {
   });
 }
 
-function renderRelay() {
+function renderPlaying() {
   const { room, me } = state;
-  const task = me.task;
-
-  if (!task || task.hasSubmitted) {
-    page(`
-      <section class="panel wide">
-        <p class="step">Round ${room.round + 1} of ${room.totalRounds + 1}</p>
-        <h2>Waiting on the rest of the table.</h2>
-        <p>${room.submittedCount} of ${room.playerCount} players have submitted this round.</p>
-      </section>
-    `);
-    return;
-  }
-
-  if (task.type === "phrase") {
-    page(`
-      <section class="grid">
-        <div class="panel">
-          <p class="step">Round ${room.round + 1} of ${room.totalRounds + 1}</p>
-          ${task.previousEntry ? `
-            <h2>What is this drawing?</h2>
-            <div class="sketchPreview"><img src="${task.previousEntry.content}" alt="Previous drawing" /></div>
-          ` : `
-            <h2>Write a phrase for someone else to draw.</h2>
-          `}
-          <form id="phraseForm">
-            <label>${task.previousEntry ? "Your guess" : "Your phrase"}
-              <input name="phrase" maxlength="80" placeholder="${task.previousEntry ? "A cat riding a skateboard" : "A dog wearing sunglasses"}" required />
-            </label>
-            <button class="primary">Submit</button>
-          </form>
-        </div>
-        <aside class="rules">
-          <h3>Status</h3>
-          <p>${room.submittedCount} of ${room.playerCount} players have submitted this round.</p>
-        </aside>
-      </section>
-    `);
-    app.querySelector("#phraseForm").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const text = new FormData(event.currentTarget).get("phrase");
-      await emit("submitEntry", { content: text });
-    });
-    return;
-  }
+  const myPlayer = room.players.find((player) => player.id === me.playerId);
+  const alivePlayers = room.players.filter((player) => player.alive);
 
   page(`
     <section class="grid">
-      <div class="panel">
-        <p class="step">Round ${room.round + 1} of ${room.totalRounds + 1}</p>
-        <h2>Draw this phrase:</h2>
-        <p class="phraseToDraw">"${escapeHtml(task.previousEntry.content)}"</p>
-        <div class="canvasWrap">
-          <canvas id="sketchCanvas" width="320" height="220"></canvas>
+      <div class="panel arenaPanel">
+        <p class="step">${alivePlayers.length} alive of ${room.players.length}</p>
+        <div class="arenaWrap">
+          <canvas id="arenaCanvas" width="${room.arenaSize}" height="${room.arenaSize}"></canvas>
         </div>
-        <div class="canvasActions">
-          <button class="ghost" data-action="clear" type="button">Clear</button>
-          <button class="primary" data-action="submitDrawing" type="button">Submit drawing</button>
-        </div>
+        ${myPlayer && !myPlayer.alive ? `<p class="waiting">You've been eliminated. Spectating the rest of the match.</p>` : `<p class="tip">Tap or click inside the arena to move.</p>`}
       </div>
       <aside class="rules">
-        <h3>Status</h3>
-        <p>${room.submittedCount} of ${room.playerCount} players have submitted this round.</p>
+        <h3>Players</h3>
+        <div class="players">${room.players.map((player) => `
+          <div class="player">
+            <span>${escapeHtml(player.name)}${player.id === me.playerId ? " (you)" : ""}</span>
+            <small class="${player.alive ? "alive" : "eliminated"}">${player.alive ? `${player.health}%` : "out"}</small>
+          </div>
+        `).join("")}</div>
       </aside>
     </section>
   `);
-  setupCanvas();
-  app.querySelector("[data-action='clear']").addEventListener("click", clearCanvas);
-  app.querySelector("[data-action='submitDrawing']").addEventListener("click", async () => {
-    const canvas = document.getElementById("sketchCanvas");
-    const dataUrl = canvas.toDataURL("image/png");
-    await emit("submitEntry", { content: dataUrl });
+
+  arenaCanvas = document.getElementById("arenaCanvas");
+  arenaCtx = arenaCanvas.getContext("2d");
+  drawArena();
+
+  if (myPlayer && myPlayer.alive) {
+    const handleTap = (event) => {
+      event.preventDefault();
+      const rect = arenaCanvas.getBoundingClientRect();
+      const scaleX = arenaCanvas.width / rect.width;
+      const scaleY = arenaCanvas.height / rect.height;
+      const point = event.touches ? event.touches[0] : event;
+      const x = (point.clientX - rect.left) * scaleX;
+      const y = (point.clientY - rect.top) * scaleY;
+      emit("setTarget", { x, y });
+    };
+    arenaCanvas.addEventListener("mousedown", handleTap);
+    arenaCanvas.addEventListener("touchstart", handleTap, { passive: false });
+  }
+}
+
+function drawArena() {
+  if (!arenaCanvas || !arenaCtx || !state.room) return;
+  const { room, me } = state;
+  const ctx = arenaCtx;
+  const size = room.arenaSize;
+
+  ctx.fillStyle = "#150a10";
+  ctx.fillRect(0, 0, size, size);
+
+  ctx.beginPath();
+  ctx.arc(room.zone.cx, room.zone.cy, room.zone.radius, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(111, 227, 160, 0.12)";
+  ctx.fill();
+  ctx.strokeStyle = "#6fe3a0";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  room.players.forEach((player) => {
+    if (!player.alive) return;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, 10, 0, Math.PI * 2);
+    ctx.fillStyle = player.id === me.playerId ? "#ffb454" : "#7aa8ff";
+    ctx.fill();
+    ctx.strokeStyle = "#05070d";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = "#f2f4fa";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(player.name, player.x, player.y - 16);
   });
 }
 
-function setupCanvas() {
-  const canvas = document.getElementById("sketchCanvas");
-  if (!canvas) return;
-  canvasCtx = canvas.getContext("2d");
-  canvasCtx.fillStyle = "#ffffff";
-  canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
-  canvasCtx.strokeStyle = "#0b0d14";
-  canvasCtx.lineWidth = 3;
-  canvasCtx.lineCap = "round";
-  canvasCtx.lineJoin = "round";
-
-  const getPos = (event) => {
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const point = event.touches ? event.touches[0] : event;
-    return {
-      x: (point.clientX - rect.left) * scaleX,
-      y: (point.clientY - rect.top) * scaleY
-    };
-  };
-
-  const start = (event) => {
-    event.preventDefault();
-    drawing = true;
-    lastPoint = getPos(event);
-  };
-  const move = (event) => {
-    if (!drawing) return;
-    event.preventDefault();
-    const point = getPos(event);
-    canvasCtx.beginPath();
-    canvasCtx.moveTo(lastPoint.x, lastPoint.y);
-    canvasCtx.lineTo(point.x, point.y);
-    canvasCtx.stroke();
-    lastPoint = point;
-  };
-  const end = () => {
-    drawing = false;
-    lastPoint = null;
-  };
-
-  canvas.addEventListener("mousedown", start);
-  canvas.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", end);
-  canvas.addEventListener("touchstart", start, { passive: false });
-  canvas.addEventListener("touchmove", move, { passive: false });
-  canvas.addEventListener("touchend", end);
-}
-
-function clearCanvas() {
-  const canvas = document.getElementById("sketchCanvas");
-  if (!canvas || !canvasCtx) return;
-  canvasCtx.fillStyle = "#ffffff";
-  canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
-}
-
-function renderReveal() {
+function renderGameOver() {
   const { room, me } = state;
-  const books = room.books;
-  const book = books[revealIndex];
-
   page(`
-    <section class="panel wide">
-      <p class="step">Chain ${revealIndex + 1} of ${books.length}</p>
-      <h2>Started by ${escapeHtml(book.authorName)}</h2>
-      <div class="chainStack">${book.entries.map((entry, index) => `
-        <article class="chainEntry" style="--i: ${index}">
-          <span class="chainAuthor">${escapeHtml(entry.playerName)}</span>
-          ${entry.type === "phrase" ? `<p class="chainPhrase">"${escapeHtml(entry.content)}"</p>` : `<img class="chainDrawing" src="${entry.content}" alt="Drawing by ${escapeHtml(entry.playerName)}" />`}
-        </article>
+    <section class="panel wide gameOverPanel">
+      <p class="step">Match over</p>
+      <h2>${room.winnerName ? `${escapeHtml(room.winnerName)} survives.` : "No survivors."}</h2>
+      <div class="players">${room.players.map((player) => `
+        <div class="player">
+          <span>${escapeHtml(player.name)}</span>
+          <small>${player.id === room.winnerId ? "winner" : "eliminated"}</small>
+        </div>
       `).join("")}</div>
-      <div class="revealNav">
-        <button class="ghost" data-action="prevChain" ${revealIndex === 0 ? "disabled" : ""} type="button">Previous chain</button>
-        <button class="ghost" data-action="nextChain" ${revealIndex >= books.length - 1 ? "disabled" : ""} type="button">Next chain</button>
-      </div>
       ${me.isHost ? `<button class="primary" data-action="again">Play again</button>` : `<p class="waiting">The host can reset the room.</p>`}
     </section>
   `);
-  app.querySelector("[data-action='prevChain']")?.addEventListener("click", () => {
-    if (revealIndex > 0) {
-      revealIndex -= 1;
-      render();
-    }
-  });
-  app.querySelector("[data-action='nextChain']")?.addEventListener("click", () => {
-    if (revealIndex < books.length - 1) {
-      revealIndex += 1;
-      render();
-    }
-  });
   app.querySelector("[data-action='again']")?.addEventListener("click", () => emit("playAgain"));
 }
 
@@ -459,8 +397,8 @@ async function resumeSavedSession() {
   if (!reply?.ok) {
     isResuming = false;
     clearSession();
-    render();
   }
+  render();
 }
 
 function getOrCreatePlayerId() {
