@@ -1,13 +1,14 @@
 :root {
-  --bg: #05070d;
-  --panel: rgba(18, 22, 34, 0.72);
-  --panel-2: rgba(14, 18, 28, 0.85);
-  --line: rgba(120, 170, 255, 0.22);
-  --text: #f2f4fa;
-  --muted: #a9b2c9;
-  --accent: #6fa8ff;
-  --accent-hot: #8fc2ff;
+  --bg: #0a0507;
+  --panel: rgba(24, 14, 20, 0.75);
+  --panel-2: rgba(18, 10, 15, 0.85);
+  --line: rgba(255, 150, 90, 0.22);
+  --text: #f7ede8;
+  --muted: #cdb3ab;
+  --accent: #ff9a5a;
+  --accent-hot: #ffb454;
   --green: #6fe3a0;
+  --red: #ff6b6b;
 }
 
 * {
@@ -17,7 +18,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(circle at 20% -10%, rgba(111, 168, 255, 0.14), transparent 55%), var(--bg);
+  background: radial-gradient(circle at 80% -10%, rgba(255, 154, 90, 0.14), transparent 55%), var(--bg);
   color: var(--text);
   font-family: "Inter", system-ui, sans-serif;
   padding-top: env(safe-area-inset-top, 0px);
@@ -34,7 +35,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 0 18px;
-  background: linear-gradient(180deg, rgba(28, 36, 53, 0.98), rgba(8, 12, 21, 0.98));
+  background: linear-gradient(180deg, rgba(40, 24, 30, 0.98), rgba(10, 6, 8, 0.98));
   color: var(--text);
   cursor: pointer;
   font-weight: 800;
@@ -44,7 +45,7 @@ button {
 
 button:hover:not(:disabled) {
   border-color: var(--accent);
-  box-shadow: 0 0 24px rgba(111, 168, 255, 0.22), 0 12px 28px rgba(0, 0, 0, 0.44);
+  box-shadow: 0 0 24px rgba(255, 154, 90, 0.22), 0 12px 28px rgba(0, 0, 0, 0.44);
   transform: translateY(-1px);
 }
 
@@ -55,7 +56,7 @@ button:disabled {
 
 .primary {
   background: linear-gradient(180deg, var(--accent-hot), var(--accent));
-  color: #071018;
+  color: #1a0d04;
   border-color: var(--accent-hot);
   text-transform: uppercase;
 }
@@ -216,7 +217,7 @@ input {
   min-height: 50px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: rgba(4, 7, 13, 0.86);
+  background: rgba(9, 5, 7, 0.86);
   color: var(--text);
   padding: 0 14px;
 }
@@ -256,8 +257,13 @@ form {
   gap: 12px;
 }
 
+.player small.alive,
 .player small {
   color: var(--green);
+}
+
+.player small.eliminated {
+  color: var(--red);
 }
 
 .waiting {
@@ -295,87 +301,30 @@ form {
   width: fit-content;
 }
 
-.sketchPreview {
+.arenaPanel {
+  text-align: center;
+}
+
+.arenaWrap {
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
-  margin-bottom: 18px;
-  background: #fff;
-  max-width: 340px;
-}
-
-.sketchPreview img {
-  display: block;
   width: 100%;
-}
-
-.phraseToDraw {
-  font-size: 1.3rem;
-  color: var(--text);
-  font-weight: 700;
-  margin-bottom: 16px;
-}
-
-.canvasWrap {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
-  width: fit-content;
-  background: #fff;
+  max-width: 560px;
+  margin: 0 auto;
+  aspect-ratio: 1 / 1;
   touch-action: none;
 }
 
-#sketchCanvas {
+#arenaCanvas {
   display: block;
+  width: 100%;
+  height: 100%;
   cursor: crosshair;
 }
 
-.canvasActions {
-  display: flex;
-  gap: 12px;
-  margin-top: 16px;
-}
-
-.chainStack {
-  display: grid;
-  gap: 20px;
-  margin: 20px 0;
-}
-
-.chainEntry {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-2);
-  padding: 16px;
-}
-
-.chainAuthor {
-  display: block;
-  color: var(--accent-hot);
-  font-weight: 700;
-  font-size: 0.85rem;
-  margin-bottom: 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.chainPhrase {
-  font-size: 1.15rem;
-  color: var(--text);
-  margin: 0;
-}
-
-.chainDrawing {
-  max-width: 100%;
-  border-radius: 4px;
-  background: #fff;
-  display: block;
-}
-
-.revealNav {
-  display: flex;
-  gap: 12px;
-  margin: 20px 0;
+.gameOverPanel {
+  text-align: left;
 }
 
 .introCard {
@@ -386,7 +335,7 @@ form {
   padding: 28px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: rgba(4, 6, 12, 0.92);
+  background: rgba(9, 5, 7, 0.92);
   text-align: left;
 }
 
@@ -409,7 +358,7 @@ form {
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  border: 3px solid rgba(111, 168, 255, 0.2);
+  border: 3px solid rgba(255, 154, 90, 0.2);
   border-top-color: var(--accent-hot);
   animation: spin 0.9s linear infinite;
 }
